@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1d1721">
+<meta name="description" content="2019.02.18 —— 只有我们两个人知道的地方">
+<title>这是我们之间的秘密 · 2019.02.18</title>
+<link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="scene"></canvas>
+  <div class="vignette" aria-hidden="true"></div>
+</div>
+
+<!-- ============ 加载 ============ -->
+<section id="loading" class="screen screen--loading">
+  <div class="loading__inner">
+    <div class="loading__mark">仙姑巴巴<i>·</i>仙姑麻麻</div>
+    <div class="loading__bar"><i id="load-fill"></i></div>
+    <div class="loading__meta">
+      <span id="load-tip">正在把回忆铺成一条路……</span>
+      <span id="load-pct" class="loading__pct">0%</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 开场 ============ -->
+<section id="intro" class="screen screen--intro is-hidden">
+  <div class="intro__inner">
+    <p class="kicker">SOMEWHERE ONLY WE KNOW</p>
+    <h1 class="intro__title">这是我们之间的秘密</h1>
+    <p class="intro__sub">2019 — 2026 &nbsp;·&nbsp; 一座只属于两个人的小岛</p>
+    <button class="startbtn" id="btn-start">
+      <span class="startbtn__en">CLICK TO START</span>
+      <span class="startbtn__cn">点击进入</span>
+    </button>
+    <p class="intro__hint">电脑：WASD／方向键开车，鼠标拖动环视　·　手机：左下摇杆开车，滑动屏幕环视</p>
+  </div>
+</section>
+
+<!-- ============ 口令门 ============ -->
+<section id="gate" class="screen screen--gate is-hidden">
+  <div class="gate__card">
+    <p class="kicker">THE KEY IS A DATE</p>
+    <h2 class="gate__title">只有我们知道的那一天</h2>
+    <p class="gate__desc">输入我们在一起的那一天，门就会打开。</p>
+
+    <div class="gate__display" id="gate-display" aria-live="polite"></div>
+
+    <p class="gate__hint" id="gate-hint"></p>
+
+    <div class="keypad" id="keypad">
+      <button class="key" data-key="1">1</button>
+      <button class="key" data-key="2">2</button>
+      <button class="key" data-key="3">3</button>
+      <button class="key" data-key="4">4</button>
+      <button class="key" data-key="5">5</button>
+      <button class="key" data-key="6">6</button>
+      <button class="key" data-key="7">7</button>
+      <button class="key" data-key="8">8</button>
+      <button class="key" data-key="9">9</button>
+      <button class="key key--fn" data-key="del" aria-label="删除">⌫</button>
+      <button class="key" data-key="0">0</button>
+      <button class="key key--ok" data-key="ok" aria-label="确定">✓</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ HUD ============ -->
+<div id="hud" class="hud is-hidden">
+  <header class="hud__tl">
+    <div class="brand">仙姑巴巴<i>·</i>仙姑麻麻</div>
+    <div class="progress">
+      <div class="progress__track"><i id="prog-fill"></i></div>
+      <span class="progress__txt" id="prog-txt">0 / 16 段回忆</span>
+    </div>
+    <div class="nextup is-hidden" id="next-up"></div>
+  </header>
+
+  <nav class="hud__tr">
+    <button class="iconbtn" id="btn-album" aria-label="相册"><svg class="ic"><use href="#i-album"/></svg><span>相册</span></button>
+    <button class="iconbtn" id="btn-gallery" aria-label="回忆长廊"><svg class="ic"><use href="#i-star"/></svg><span>长廊</span></button>
+    <button class="iconbtn" id="btn-letter" aria-label="写给你的信"><svg class="ic"><use href="#i-letter"/></svg><span>信</span></button>
+    <button class="iconbtn" id="btn-help" aria-label="玩法"><svg class="ic"><use href="#i-help"/></svg><span>玩法</span></button>
+    <button class="iconbtn" id="btn-audio" aria-label="声音"><svg class="ic"><use href="#i-music"/></svg><span>声音</span></button>
+  </nav>
+
+  <div class="hud__prompt is-hidden" id="prompt"></div>
+
+  <div class="hud__bl">
+    <p class="keys">WASD / ←↑↓→ 开车　·　空格 跳　·　鼠标拖动环视　·　E 查看</p>
+  </div>
+
+  <div class="hud__map">
+    <canvas id="minimap" width="300" height="300"></canvas>
+  </div>
+
+  <div class="touch" id="touch">
+    <div class="touch__joy" id="joy"><i class="joy__ring"></i><i class="joy__knob"></i></div>
+    <button class="touch__jump" id="btn-jump" aria-label="跳">跳</button>
+  </div>
+</div>
+
+<!-- ============ 弹层 ============ -->
+<div id="panel" class="panel is-hidden" role="dialog" aria-modal="true">
+  <div class="panel__scrim" data-close></div>
+  <div class="panel__card" id="panel-card">
+    <button class="panel__close" data-close aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
+    <div class="panel__body" id="panel-body"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast is-hidden"></div>
+
+<div id="curtain" class="curtain"></div>
+<div id="flash" class="flash"></div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
