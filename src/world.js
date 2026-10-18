@@ -1773,7 +1773,7 @@ export class World {
    * 后面映射到世界水平面上时：像素 x → 世界 x，像素 y → 世界 z，
    * 这样在"从天上往下看"的机位里，字是正的、不镜像的。
    */
-  _sampleText(text, { font = 168, step = 5, gapRatio = 0.16 } = {}) {
+  _sampleText(text, { font = 184, step = 3, gapRatio = 0.16 } = {}) {
     const cv = document.createElement('canvas');
     const ctx = cv.getContext('2d', { willReadFrequently: true });
     const FONT = `bold ${font}px "Microsoft YaHei","PingFang SC","Noto Sans SC",sans-serif`;
@@ -1825,6 +1825,7 @@ export class World {
     if (!s.dots.some(d => d.length)) return;            // 字体回退到空字形时干脆不放
     const scale = width / s.totalW;                    // canvas 像素 → 世界单位
     const hues = [0.02, 0.10, 0.14, 0.92, 0.86, 0.06]; // 玫瑰红 → 金 → 粉紫
+    const TRAIL = 16;                                  // 上升尾迹的火星数
     for (let i = 0; i < s.dots.length; i++) {
       if (!s.dots[i].length) continue;
       const cx = (s.cxs[i] - s.center) * scale;
@@ -1835,47 +1836,89 @@ export class World {
       // 鸟瞰机位离得远（700+），这里不能再按世界尺寸缩放光点，否则缩成亚像素看不见 ——
       // 直接给恒定屏幕尺寸（sizeAttenuation: false，size 就是像素）
       const mat = new THREE.PointsMaterial({
-        color: col, size: 3.0, transparent: true, opacity: 0.95,
+        color: col, size: 2.6, transparent: true, opacity: 0.95,
         blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: false, fog: false,
       });
       const pts = new THREE.Points(geo, mat);
       pts.frustumCulled = false;
       this.scene.add(pts);
+      // 尾迹：跟着炮弹头往上拖一串渐暗的火星（历史位置向前挪一格，头部最亮）
+      const hist = new Float32Array(TRAIL * 3);
+      const trailGeo = new THREE.BufferGeometry();
+      trailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL * 3), 3));
+      trailGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(TRAIL * 3), 3));
+      const trailMat = new THREE.PointsMaterial({
+        size: 2.2, transparent: true, opacity: 0.92, vertexColors: true,
+        blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: false, fog: false,
+      });
+      trailMat.color.setScalar(0.85);
+      const trail = new THREE.Points(trailGeo, trailMat);
+      trail.frustumCulled = false;
+      this.scene.add(trail);
+      for (let k = 0; k < TRAIL; k++) { hist[k * 3] = cx; hist[k * 3 + 1] = y0 + 2; hist[k * 3 + 2] = 0; }
       this.fireworks.push({
-        pts, x: cx, z: 0, y: y0 + 2, col,
+        pts, trail, trailGeo, hist, x: cx, z: 0, y: y0 + 2, col,
         // 一发够劲儿的炮弹：正好在这段文字所在的高度炸开（vy 给足，保证够得着）
         top: y, vy: 50 + Math.random() * 4,
         delay: delay + i * stagger + Math.random() * 0.08,
-        text: { dots: s.dots[i], scale, size: 3.4 },
+        text: { dots: s.dots[i], scale, size: 2.8 },
       });
     }
   }
 
-  /** 文字炸开：点从爆心聚拢成字形 → 停住让人看清 → 变暗飘落 */
+  /**
+   * 文字炸开：外圈先"砰"地炸出一圈火星，文字的点同时从爆心聚拢成字形（带一点过冲），
+   * 然后停住闪烁让人看清，最后变暗飘落。
+   */
   _spawnTextBurst(x, y, z, col, dots, scale, size) {
     const K = dots.length;
-    const src = new Float32Array(K * 3);
-    const tgt = new Float32Array(K * 3);
-    const colors = new Float32Array(K * 3);
-    const spd = new Float32Array(K);
+    const G = 64;                                       // 外圈炸开的小火星
+    const N = K + G;
+    const src = new Float32Array(N * 3);
+    const tgt = new Float32Array(N * 3);
+    const base = new Float32Array(N * 3);
+    const ph = new Float32Array(N);
+    const spd = new Float32Array(N);
     const c = new THREE.Color();
+    // 字形的最大半径（世界单位）：外圈火星按它铺开，才像"包住整个字"炸开
+    let maxR = 1;
+    for (const d of dots) maxR = Math.max(maxR, Math.hypot(d.x, d.y) * scale);
+
     for (let k = 0; k < K; k++) {
       const th = Math.random() * Math.PI * 2;
-      const ph = Math.acos(2 * Math.random() - 1);
+      const elev = Math.acos(2 * Math.random() - 1);
       const r0 = Math.random() * 1.7;                   // 起点：爆心附近的一小团
-      src[k * 3] = x + Math.sin(ph) * Math.cos(th) * r0;
-      src[k * 3 + 1] = y + Math.cos(ph) * r0;
-      src[k * 3 + 2] = z + Math.sin(ph) * Math.sin(th) * r0;
+      src[k * 3] = x + Math.sin(elev) * Math.cos(th) * r0;
+      src[k * 3 + 1] = y + Math.cos(elev) * r0;
+      src[k * 3 + 2] = z + Math.sin(elev) * Math.sin(th) * r0;
       tgt[k * 3] = x + dots[k].x * scale;               // 终点：字形上的位置
       tgt[k * 3 + 1] = y;
       tgt[k * 3 + 2] = z + dots[k].y * scale;
-      c.copy(col).offsetHSL((Math.random() - 0.5) * 0.05, 0, 0.05 + Math.random() * 0.25);
-      colors[k * 3] = c.r; colors[k * 3 + 1] = c.g; colors[k * 3 + 2] = c.b;
+      c.copy(col).offsetHSL((Math.random() - 0.5) * 0.06, 0, 0.02 + Math.random() * 0.26);
+      base[k * 3] = c.r; base[k * 3 + 1] = c.g; base[k * 3 + 2] = c.b;
       spd[k] = 0.82 + Math.random() * 0.42;             // 到位快慢错开，像真的在聚拢
+      ph[k] = Math.random() * Math.PI * 2;              // 驻足时的闪烁相位
     }
+    // 外圈：从爆心向四周炸开，半径约等于这个字的尺寸，很快熄灭
+    for (let j = 0; j < G; j++) {
+      const k = K + j;
+      const th = Math.random() * Math.PI * 2;
+      const elev = Math.acos(2 * Math.random() - 1);
+      const dx = Math.sin(elev) * Math.cos(th), dy = Math.cos(elev), dz = Math.sin(elev) * Math.sin(th);
+      src[k * 3] = x; src[k * 3 + 1] = y; src[k * 3 + 2] = z;
+      const R = maxR * (0.62 + Math.random() * 0.55);
+      tgt[k * 3] = x + dx * R;
+      tgt[k * 3 + 1] = y + dy * R;
+      tgt[k * 3 + 2] = z + dz * R;
+      c.copy(col).offsetHSL((Math.random() - 0.5) * 0.10, 0, 0.22 + Math.random() * 0.30);
+      base[k * 3] = c.r; base[k * 3 + 1] = c.g; base[k * 3 + 2] = c.b;
+      spd[k] = 0;
+      ph[k] = Math.random() * Math.PI * 2;
+    }
+
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(src, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(base, 3));
     const mat = new THREE.PointsMaterial({
       size, transparent: true, opacity: 0, vertexColors: true,
       blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: false, fog: false,
@@ -1884,34 +1927,83 @@ export class World {
     const pts = new THREE.Points(geo, mat);
     pts.frustumCulled = false;
     this.scene.add(pts);
-    // 时间线：聚拢 1.0s → 驻足 4.0s → 飘落渐隐 2.0s
-    this._bursts.push({ pts, text: true, src, tgt, spd, age: 0, life: 7.0 });
+    // 时间线：聚拢 1.0s → 驻足闪烁 4.0s → 飘落渐隐 2.4s
+    this._bursts.push({ pts, text: true, src, tgt, base, spd, ph, K, N, age: 0, life: 7.8 });
   }
 
   _updateTextBurst(b, dt) {
     b.age += dt;
-    const p = b.pts.geometry.attributes.position;
-    const src = b.src, tgt = b.tgt, spd = b.spd;
-    const n = spd.length;
-    if (b.age < 1.0) {                                  // 聚拢成字
-      for (let k = 0; k < n; k++) {
-        let t = Math.min(1, b.age * spd[k]);
+    const pos = b.pts.geometry.attributes.position;
+    const colA = b.pts.geometry.attributes.color;
+    const { src, tgt, base, spd, ph, K, N } = b;
+    const age = b.age;
+    // 时间线：聚拢 1.0s → 驻足闪烁 4.0s → 飘落渐隐 2.4s
+    const falling = age >= 5.0;
+    const fall = falling ? Math.min(1, (age - 5.0) / 2.4) : 0;
+    const fade = 1 - fall;
+
+    // —— 文字点（0..K）
+    for (let k = 0; k < K; k++) {
+      if (age < 1.0) {
+        let t = Math.min(1, age * spd[k]);
         t = 1 - Math.pow(1 - t, 3);
-        p.setXYZ(k,
-          src[k * 3] + (tgt[k * 3] - src[k * 3]) * t,
-          src[k * 3 + 1] + (tgt[k * 3 + 1] - src[k * 3 + 1]) * t,
-          src[k * 3 + 2] + (tgt[k * 3 + 2] - src[k * 3 + 2]) * t);
+        const ov = 1 + 0.2 * Math.sin(Math.PI * t);            // 到位前轻微过冲，像被"吸"过去
+        pos.setXYZ(k,
+          src[k * 3] + (tgt[k * 3] - src[k * 3]) * t * ov,
+          src[k * 3 + 1] + (tgt[k * 3 + 1] - src[k * 3 + 1]) * t * ov,
+          src[k * 3 + 2] + (tgt[k * 3 + 2] - src[k * 3 + 2]) * t * ov);
+      } else {
+        pos.setXYZ(k, tgt[k * 3], tgt[k * 3 + 1] - fall * fall * 9, tgt[k * 3 + 2]);
       }
-      b.pts.material.opacity = Math.min(1, b.age / 0.28);
-    } else if (b.age < 5.0) {                           // 停住：让人看清这五个字
-      for (let k = 0; k < n; k++) p.setXYZ(k, tgt[k * 3], tgt[k * 3 + 1], tgt[k * 3 + 2]);
-      b.pts.material.opacity = 1;
-    } else {                                            // 飘落、渐隐
-      const f = Math.min(1, (b.age - 5.0) / 2.0);
-      for (let k = 0; k < n; k++) p.setXYZ(k, tgt[k * 3], tgt[k * 3 + 1] - f * f * 9, tgt[k * 3 + 2]);
-      b.pts.material.opacity = 1 - f;
+      let g = 1;
+      if (falling) g = fade;                                   // 飘落时整体渐隐
+      else if (age >= 1.0) g = 0.78 + 0.30 * Math.sin(age * 7.5 + ph[k]); // 驻足：每粒各自闪烁
+      colA.setXYZ(k, base[k * 3] * g, base[k * 3 + 1] * g, base[k * 3 + 2] * g);
     }
-    p.needsUpdate = true;
+
+    // —— 外圈火星（K..N）：一炸就向四周散开，很快熄灭
+    const gt = Math.min(1, age / 0.62);
+    const ge = 1 - Math.pow(1 - gt, 2);
+    const gf = age < 1.15 ? 1 - age / 1.15 : 0;
+    for (let k = K; k < N; k++) {
+      if (gf <= 0) { colA.setXYZ(k, 0, 0, 0); continue; }
+      pos.setXYZ(k,
+        src[k * 3] + (tgt[k * 3] - src[k * 3]) * ge,
+        src[k * 3 + 1] + (tgt[k * 3 + 1] - src[k * 3 + 1]) * ge - ge * ge * 2.4,
+        src[k * 3 + 2] + (tgt[k * 3 + 2] - src[k * 3 + 2]) * ge);
+      const f = gf * gf;
+      colA.setXYZ(k, base[k * 3] * f, base[k * 3 + 1] * f, base[k * 3 + 2] * f);
+    }
+
+    pos.needsUpdate = true;
+    colA.needsUpdate = true;
+    b.pts.material.opacity = age < 0.24 ? Math.min(1, age / 0.24) : 1;
+  }
+
+  /** 上升炮弹的尾迹：把历史位置往后挪一格、头部塞当前点，越靠尾越暗 */
+  _updateTrail(s) {
+    if (!s.trail) return;
+    const h = s.hist, n = h.length / 3;
+    for (let k = n - 1; k > 0; k--) {
+      h[k * 3] = h[(k - 1) * 3];
+      h[k * 3 + 1] = h[(k - 1) * 3 + 1];
+      h[k * 3 + 2] = h[(k - 1) * 3 + 2];
+    }
+    h[0] = s.x; h[1] = s.y; h[2] = s.z;
+    const tp = s.trailGeo.attributes.position;
+    const tc = s.trailGeo.attributes.color;
+    for (let k = 0; k < n; k++) {
+      const f = 1 - k / n;                       // 头部 1 → 尾部 0
+      const j = 0.10 * (1 - f);                  // 越靠尾抖得越开，像散开的火星
+      tp.setXYZ(k,
+        h[k * 3] + (Math.random() - 0.5) * j,
+        h[k * 3 + 1] + (Math.random() - 0.5) * j,
+        h[k * 3 + 2] + (Math.random() - 0.5) * j);
+      const g = f * f;
+      tc.setXYZ(k, s.col.r * g, s.col.g * g, s.col.b * g);
+    }
+    tp.needsUpdate = true;
+    tc.needsUpdate = true;
   }
 
   _updateFireworks(dt) {
@@ -1925,7 +2017,13 @@ export class World {
       const p = s.pts.geometry.attributes.position;
       p.setY(0, s.y);
       p.needsUpdate = true;
+      this._updateTrail(s);
       if (s.y >= s.top || s.vy <= 0) {
+        if (s.trail) {
+          this.scene.remove(s.trail);
+          s.trail.geometry.dispose();
+          s.trail.material.dispose();
+        }
         this.scene.remove(s.pts);
         s.pts.geometry.dispose();
         s.pts.material.dispose();

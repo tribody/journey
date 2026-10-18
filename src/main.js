@@ -14,8 +14,9 @@ import { Audio } from './audio.js';
 import { MEMORIES, photoUrl, ALBUM } from './memories.js';
 
 const SAVE_KEY = 'sgbb.m20190218.visited.v1';
-const CELEBRATED_KEY = 'sgbb.m20190218.celebrated.v1';
 const isTouch = matchMedia('(hover:none) and (pointer:coarse)').matches;
+// ?debug：把收尾触发门暴露成可观测/可传送的钩子（自动化验证与真机排查都用它）
+const DEBUG = /[?&]debug/.test(location.search);
 
 /* ---------------- 渲染器 ---------------- */
 const canvas = document.getElementById('scene');
@@ -78,13 +79,13 @@ let nearestT = 0;
 let last = 0;
 // —— 顺序锁 / 收尾庆祝的状态
 let nextKey = null;                 // 当前"该去撞"的那根光柱
-let celebrated = loadCelebrated();  // 已经放过烟花、进过长廊
+let inHomeZone = false;             // 已经站在院子里（走出后重新武装，所以每次回家都能再放一轮）
 let celebrating = false;
 let nudgeAt = 0;                    // 提示节流（免得贴着柱子磨的时候刷屏）
 
 // —— 收尾鸟瞰：放烟花时把镜头拉到小岛正上方，让整座岛（和天上的五个字）都收进画面
-// rise 升空 / hold 停留 / back 落回车后，单位是秒
-const FINALE = { fov: 28, islandR: 200, fit: 0.94, rise: 2.8, hold: 10.0, back: 2.6 };
+// rise 升空 / hold 停留 / back 落回车后，单位是秒。hold 要罩住文字烟花整条时间线（炸开 2.0 + 5 字 × 0.4 + 驻足 5.0 + 飘落 2.4）
+const FINALE = { fov: 28, islandR: 200, fit: 0.94, rise: 2.8, hold: 11.5, back: 2.6 };
 let finaleT = 0;
 const finaleFrom = new THREE.Vector3();       // 起飞时的机位
 const finaleLookFrom = new THREE.Vector3();   // 起飞时的注视点
@@ -271,8 +272,7 @@ function handleMemoryImpact(key) {
 /** 16 段全亮 + 车开进院子：镜头升到岛的正上方，放一轮「老婆我爱你」的文字烟花，最后自动展开长廊 */
 function launchCelebration() {
   celebrating = true;
-  celebrated = true;
-  saveCelebrated();
+  if (DEBUG) console.log('[finale] 到家放烟花', { lit: visitedCount(), total: MEMORIES.length });
   audio.complete();
   ui.flash();
   ui.toast('<b>✦ 16 段回忆都点亮了</b> · 欢迎回家');
@@ -506,16 +506,25 @@ function render(dt) {
     });
   }
 
-  // 16 段全亮 + 车开进院子 → 放烟花、自动展开长廊（一次性）
+  // 16 段全亮 + 车开进院子 → 放烟花、自动展开长廊
   // 这里有两个坑：
   //   1) 原来还要求 !ui.isPanelOpen() —— 可"开到家 → 顺手打开那封信"会让面板一直开着，
   //      于是烟花永远排不上，只会弹出信。烟花和信并不冲突，所以这条去掉。
   //   2) 判定半径 9.0 比"可交互提示"的 9.5 还小 —— 车停在院子边上（9.0~9.5）时能按 E 开信，
   //      却不算"回到家"。放宽到 12.0，只要提示能亮起来就一定算到家。
-  if (!celebrated && !celebrating && state === 'world'
-    && visitedCount() === MEMORIES.length
-    && Math.hypot(car.pos.x - world.homeCenter.x, car.pos.z - world.homeCenter.z) < 12.0) {
-    launchCelebration();
+  // 另外这里不再往 localStorage 写"已放过"——那种一次性锁会让第二次回家永远没反应；
+  // 改成"进区放一次、出区（>18）重新武装"，所以每一次开回家都会有一轮烟花。
+  if (state === 'world' && !celebrating && visitedCount() === MEMORIES.length) {
+    const dHome = Math.hypot(car.pos.x - world.homeCenter.x, car.pos.z - world.homeCenter.z);
+    if (dHome < 12.0) {
+      if (!inHomeZone) {
+        inHomeZone = true;
+        if (DEBUG) console.log('[finale] 进院子', { lit: visitedCount(), dist: +dHome.toFixed(1) });
+        launchCelebration();
+      }
+    } else if (dHome > 18.0) {
+      inHomeZone = false;
+    }
   }
 
   composer.render(dt);
@@ -538,11 +547,20 @@ function loadVisited() {
 function saveVisited() {
   try { localStorage.setItem(SAVE_KEY, JSON.stringify([...visited])); } catch {}
 }
-function loadCelebrated() {
-  try { return localStorage.getItem(CELEBRATED_KEY) === '1'; } catch { return false; }
-}
-function saveCelebrated() {
-  try { localStorage.setItem(CELEBRATED_KEY, '1'); } catch {}
+
+// —— ?debug 钩子：随时读收尾门的状态，或把车直接传送到院子里（绕过后台标签页的节流，方便验证）
+if (DEBUG) {
+  window.__sgbb = () => ({
+    state, celebrating, inHomeZone,
+    lit: visitedCount(), total: MEMORIES.length,
+    dist: +Math.hypot(car.pos.x - world.homeCenter.x, car.pos.z - world.homeCenter.z).toFixed(1),
+    pos: [+car.pos.x.toFixed(1), +car.pos.z.toFixed(1)],
+    shells: world.fireworks.length, bursts: world._bursts.length,
+  });
+  window.__sgbbCar = (x, z) => {
+    car.pos.set(x, car.pos.y, z);
+    car.snapToGround?.();
+  };
 }
 
 boot();
