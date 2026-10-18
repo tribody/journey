@@ -13,6 +13,31 @@ const el = (tag, cls, html) => {
   return n;
 };
 
+/**
+ * 图片取不到时自动重试（最多 tries 次，每次隔 260ms）。
+ * 本地小服务器一次要并发拉几十张照片，偶尔会有一两张被拒（连接被重置），
+ * 用手机走局域网看更容易出现；重试一下用户基本察觉不到。
+ * 同一个 img 只会挂一个 error 监听，反复换 src（照片舞台）也不会堆监听。
+ */
+function loadImg(img, url, tries = 3) {
+  img.dataset.retryUrl = url;
+  img._retryLeft = tries;
+  if (!img._retryHooked) {
+    img._retryHooked = true;
+    img.addEventListener('error', () => {
+      if (!(img._retryLeft > 0)) return;
+      img._retryLeft--;
+      const u = img.dataset.retryUrl;
+      if (!u) return;
+      setTimeout(() => {
+        img.src = `${u}${u.includes('?') ? '&' : '?'}r=${Date.now()}`;
+      }, 260);
+    });
+  }
+  img.src = url;
+  return img;
+}
+
 export class UI {
   constructor(hooks = {}) {
     this.hooks = hooks;
@@ -277,7 +302,7 @@ export class UI {
     const thumbBtns = list.map((p, i) => {
       const b = el('button');
       const t = el('img');
-      t.src = p.thumb || p.src;
+      loadImg(t, p.thumb || p.src);
       t.alt = '';
       t.draggable = false;
       b.appendChild(t);
@@ -300,7 +325,7 @@ export class UI {
       idx = (i + list.length) % list.length;
       img.style.animation = 'none';
       void img.offsetWidth;
-      img.src = list[idx].src;
+      loadImg(img, list[idx].src);
       img.style.animation = '';
       cap.textContent = list[idx].cap || '';
       count.textContent = `${idx + 1} / ${list.length}`;
@@ -354,7 +379,7 @@ export class UI {
       const media = el('div', 'gal__img');
       if (m.photos && m.photos.length) {
         const im = el('img');
-        im.src = photoUrl(m.photos[0].p, true);
+        loadImg(im, photoUrl(m.photos[0].p, true));
         im.loading = 'lazy';
         im.alt = m.title;
         im.draggable = false;
@@ -405,7 +430,7 @@ export class UI {
     ALBUM.forEach((p, i) => {
       const b = el('button');
       const im = el('img');
-      im.src = photoUrl(p.p, true);
+      loadImg(im, photoUrl(p.p, true));
       im.loading = 'lazy';
       im.alt = p.cap;
       im.draggable = false;

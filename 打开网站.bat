@@ -24,6 +24,6 @@ echo.
 echo   关闭这个窗口就会停止服务。
 echo.
 
-start "生日礼物 · 本地服务器" cmd /c "%PY% -m http.server %PORT%"
+start "生日礼物 · 本地服务器" cmd /c "%PY% "%~dp0tools\serve.py" %PORT%"
 timeout /t 2 /nobreak >nul
 start "" "http://127.0.0.1:%PORT%/"

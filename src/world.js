@@ -359,6 +359,7 @@ export class World {
     );
     sky.renderOrder = -1;
     this.scene.add(sky);
+    this.sky = sky;
     this.skyMat = sky.material;
 
     // 雾：远处溶进夜色（用 night preset 的 fogColorA），让岛的边缘和地平线一起沉进蓝紫里
@@ -1764,6 +1765,155 @@ export class World {
     this._bursts.push({ pts, vel, life: 2.2, fade: 1.6 });
   }
 
+  /* ---------- 5b. 文字烟花（收尾：鸟瞰小岛 + 「老婆我爱你」五个字） ---------- */
+
+  /**
+   * 把一段文字画进离屏 canvas，再按网格采样成"点的形状"。
+   * 返回每个字的点集（坐标是相对该字中心的像素偏移，y 向下）——
+   * 后面映射到世界水平面上时：像素 x → 世界 x，像素 y → 世界 z，
+   * 这样在"从天上往下看"的机位里，字是正的、不镜像的。
+   */
+  _sampleText(text, { font = 168, step = 5, gapRatio = 0.16 } = {}) {
+    const cv = document.createElement('canvas');
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const FONT = `bold ${font}px "Microsoft YaHei","PingFang SC","Noto Sans SC",sans-serif`;
+    ctx.font = FONT;
+    const chars = Array.from(text);
+    const gap = Math.round(font * gapRatio);
+    const widths = chars.map(c => ctx.measureText(c).width);
+    const totalW = Math.round(widths.reduce((a, b) => a + b, 0) + gap * (chars.length - 1));
+    cv.width = totalW + step * 2;
+    cv.height = Math.round(font * 1.3);
+    ctx.font = FONT;                    // 改过 canvas 尺寸后必须重设
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+
+    const cy = cv.height / 2;
+    const box = [];
+    let px = step;
+    for (let i = 0; i < chars.length; i++) {
+      ctx.fillText(chars[i], px, cy);
+      box.push({ x0: px - 1, x1: px + widths[i] + 1, cx: px + widths[i] / 2 });
+      px += widths[i] + gap;
+    }
+
+    const data = ctx.getImageData(0, 0, cv.width, cv.height).data;
+    const dots = chars.map(() => []);
+    for (let y = step; y < cv.height; y += step) {
+      for (let x = 0; x < cv.width; x += step) {
+        if (data[(y * cv.width + x) * 4 + 3] < 128) continue;
+        for (let i = 0; i < box.length; i++) {
+          if (x >= box[i].x0 && x <= box[i].x1) { dots[i].push({ x: x - box[i].cx, y: y - cy }); break; }
+        }
+      }
+    }
+    return {
+      dots,
+      cxs: box.map(b => b.cx),
+      totalW,
+      center: cv.width / 2,
+    };
+  }
+
+  /**
+   * 文字烟花：每个字一发炮弹，从岛上不同位置升空，到顶后炸成那个字。
+   * opts.width 是整段文字在世界里的宽度（由机位按屏幕比例算好传进来）
+   */
+  launchTextFireworks(text = '老婆我爱你', opts = {}) {
+    const { width = 380, y = 46, delay = 2.0, stagger = 0.4 } = opts;
+    const s = this._sampleText(text);
+    if (!s.dots.some(d => d.length)) return;            // 字体回退到空字形时干脆不放
+    const scale = width / s.totalW;                    // canvas 像素 → 世界单位
+    const hues = [0.02, 0.10, 0.14, 0.92, 0.86, 0.06]; // 玫瑰红 → 金 → 粉紫
+    for (let i = 0; i < s.dots.length; i++) {
+      if (!s.dots[i].length) continue;
+      const cx = (s.cxs[i] - s.center) * scale;
+      const col = new THREE.Color().setHSL(hues[i % hues.length], 0.9, 0.68);
+      const y0 = Math.max(heightAt(cx, 0), 0);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([cx, y0 + 2, 0]), 3));
+      // 鸟瞰机位离得远（700+），这里不能再按世界尺寸缩放光点，否则缩成亚像素看不见 ——
+      // 直接给恒定屏幕尺寸（sizeAttenuation: false，size 就是像素）
+      const mat = new THREE.PointsMaterial({
+        color: col, size: 3.0, transparent: true, opacity: 0.95,
+        blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: false, fog: false,
+      });
+      const pts = new THREE.Points(geo, mat);
+      pts.frustumCulled = false;
+      this.scene.add(pts);
+      this.fireworks.push({
+        pts, x: cx, z: 0, y: y0 + 2, col,
+        // 一发够劲儿的炮弹：正好在这段文字所在的高度炸开（vy 给足，保证够得着）
+        top: y, vy: 50 + Math.random() * 4,
+        delay: delay + i * stagger + Math.random() * 0.08,
+        text: { dots: s.dots[i], scale, size: 3.4 },
+      });
+    }
+  }
+
+  /** 文字炸开：点从爆心聚拢成字形 → 停住让人看清 → 变暗飘落 */
+  _spawnTextBurst(x, y, z, col, dots, scale, size) {
+    const K = dots.length;
+    const src = new Float32Array(K * 3);
+    const tgt = new Float32Array(K * 3);
+    const colors = new Float32Array(K * 3);
+    const spd = new Float32Array(K);
+    const c = new THREE.Color();
+    for (let k = 0; k < K; k++) {
+      const th = Math.random() * Math.PI * 2;
+      const ph = Math.acos(2 * Math.random() - 1);
+      const r0 = Math.random() * 1.7;                   // 起点：爆心附近的一小团
+      src[k * 3] = x + Math.sin(ph) * Math.cos(th) * r0;
+      src[k * 3 + 1] = y + Math.cos(ph) * r0;
+      src[k * 3 + 2] = z + Math.sin(ph) * Math.sin(th) * r0;
+      tgt[k * 3] = x + dots[k].x * scale;               // 终点：字形上的位置
+      tgt[k * 3 + 1] = y;
+      tgt[k * 3 + 2] = z + dots[k].y * scale;
+      c.copy(col).offsetHSL((Math.random() - 0.5) * 0.05, 0, 0.05 + Math.random() * 0.25);
+      colors[k * 3] = c.r; colors[k * 3 + 1] = c.g; colors[k * 3 + 2] = c.b;
+      spd[k] = 0.82 + Math.random() * 0.42;             // 到位快慢错开，像真的在聚拢
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(src, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const mat = new THREE.PointsMaterial({
+      size, transparent: true, opacity: 0, vertexColors: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: false, fog: false,
+    });
+    mat.color.setScalar(0.72);                          // 点会叠在一起 + 没有 tonemapping，压一点免得糊成白
+    const pts = new THREE.Points(geo, mat);
+    pts.frustumCulled = false;
+    this.scene.add(pts);
+    // 时间线：聚拢 1.0s → 驻足 4.0s → 飘落渐隐 2.0s
+    this._bursts.push({ pts, text: true, src, tgt, spd, age: 0, life: 7.0 });
+  }
+
+  _updateTextBurst(b, dt) {
+    b.age += dt;
+    const p = b.pts.geometry.attributes.position;
+    const src = b.src, tgt = b.tgt, spd = b.spd;
+    const n = spd.length;
+    if (b.age < 1.0) {                                  // 聚拢成字
+      for (let k = 0; k < n; k++) {
+        let t = Math.min(1, b.age * spd[k]);
+        t = 1 - Math.pow(1 - t, 3);
+        p.setXYZ(k,
+          src[k * 3] + (tgt[k * 3] - src[k * 3]) * t,
+          src[k * 3 + 1] + (tgt[k * 3 + 1] - src[k * 3 + 1]) * t,
+          src[k * 3 + 2] + (tgt[k * 3 + 2] - src[k * 3 + 2]) * t);
+      }
+      b.pts.material.opacity = Math.min(1, b.age / 0.28);
+    } else if (b.age < 5.0) {                           // 停住：让人看清这五个字
+      for (let k = 0; k < n; k++) p.setXYZ(k, tgt[k * 3], tgt[k * 3 + 1], tgt[k * 3 + 2]);
+      b.pts.material.opacity = 1;
+    } else {                                            // 飘落、渐隐
+      const f = Math.min(1, (b.age - 5.0) / 2.0);
+      for (let k = 0; k < n; k++) p.setXYZ(k, tgt[k * 3], tgt[k * 3 + 1] - f * f * 9, tgt[k * 3 + 2]);
+      b.pts.material.opacity = 1 - f;
+    }
+    p.needsUpdate = true;
+  }
+
   _updateFireworks(dt) {
     // 上升的炮弹
     for (let i = this.fireworks.length - 1; i >= 0; i--) {
@@ -1780,7 +1930,11 @@ export class World {
         s.pts.geometry.dispose();
         s.pts.material.dispose();
         this.fireworks.splice(i, 1);
-        this._spawnBurst(s.x, s.y, s.z, s.col);
+        if (s.text) {
+          this._spawnTextBurst(s.x, s.y, s.z, s.col, s.text.dots, s.text.scale, s.text.size);
+        } else {
+          this._spawnBurst(s.x, s.y, s.z, s.col);
+        }
       }
     }
     // 炸开的点云
@@ -1794,6 +1948,7 @@ export class World {
         this._bursts.splice(i, 1);
         continue;
       }
+      if (b.text) { this._updateTextBurst(b, dt); continue; }
       const p = b.pts.geometry.attributes.position;
       for (let k = 0; k < b.vel.length; k++) {
         const v = b.vel[k];
@@ -1804,6 +1959,7 @@ export class World {
       b.pts.material.opacity = Math.min(1, b.life / b.fade);
     }
   }
+
 
   setVisited(key, on = true) {
     const mk = this.pickTargets.find(m => m.key === key);
@@ -1837,6 +1993,18 @@ export class World {
     if (!this.homeNode || !this.homeNode.halo) return;
     this.homeNode.halo.visible = on;
     this.homeHalo = on;
+  }
+
+  /* ---------- 6. 收尾鸟瞰用的小接口 ---------- */
+
+  /** 收尾时相机要飞到很高，雾的远平面得暂时推开（关掉），否则整座岛被雾吞掉 */
+  setFogRange(near, far) {
+    if (this.scene.fog) { this.scene.fog.near = near; this.scene.fog.far = far; }
+  }
+
+  /** 天空穹顶球原本居中在原点，相机升到球半径之外就穿帮了 —— 让天穹跟着相机走 */
+  skyFollow(x, y, z) {
+    if (this.sky) this.sky.position.set(x, y, z);
   }
 }
 
